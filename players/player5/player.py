@@ -1,28 +1,177 @@
+"""Naive exhaustive search with a fixed first-gate pose and exactly one gate."""
+
+import math
+from dataclasses import dataclass
+
+from shapely.geometry import LineString
+
 from players.player0 import Player
-from src.enclosure import Construction
+from src.constants import ANGLE_TOL, MAX_FACE_LENGTH, MIN_ENCLOSURE_PIECES, TOL
+from src.enclosure import Construction, score_construction, validate_construction
+from src.pieces import Connector, ConnectorType, Piece, PieceType
+
+
+@dataclass
+class SearchStats:
+    nodes: int = 0
+    closed_candidates: int = 0
+    valid_polygons: int = 0
+    boundary_prunes: int = 0
+    crossing_prunes: int = 0
+    face_prunes: int = 0
+    exhausted_leaves: int = 0
 
 
 class Player5(Player):
-    """Group 5: <one line on your strategy -- fill this in>."""
+    """Enumerate every wall/connector chain rooted at a fixed starting gate.
+
+    Defaults to the first room vertex, pointing along its outgoing edge.
+    Optional keyword arguments fix another pose or a particular gate length.
+    No beam width, depth cap, early success exit, or internal time limit: the
+    simulator's CPU limit still applies. Only tiny inventories are practical.
+    """
+
+    def __init__(
+        self,
+        room,
+        inventory,
+        weights,
+        *,
+        start=None,
+        start_heading=None,
+        gate_length=None,
+    ):
+        super().__init__(room, inventory, weights)
+        corners = room.get_boundary_points()
+        self.start = tuple(corners[0] if start is None else start)
+        self.start_heading = (
+            math.degrees(
+                math.atan2(corners[1][1] - corners[0][1], corners[1][0] - corners[0][0])
+            )
+            if start_heading is None
+            else start_heading
+        )
+        self.gate_length = gate_length
+        self.stats = SearchStats()
+        self.best_score = float("-inf")
 
     def build_enclosure(self) -> Construction | None:
-        # Set up for you by Player.__init__:
-        #   self.room       the room footprint (self.room.polygon is a shapely Polygon;
-        #                   self.room.contains_enclosure(polygon) checks a candidate fits)
-        #   self.inventory  the walls, gates and connectors you may use
-        #   self.weights    the scoring weights A, C and G
-        #
-        # Return a Construction describing a closed loop of walls/gates and
-        # connectors, or None for "no solution".
-        #
-        # None scores 0; an invalid Construction scores -1000; a valid one scores
-        # 1000 + A*area + C*perimeter (+ G for a second gate on another face).
-        # So when you are not sure, return None.
-        #
-        # You get 300 s of CPU time for the whole run, including this class's
-        # constructor (--cpu-limit changes it when testing). Past that the run
-        # is stopped and scores 0.
-        #
-        # PLACEMENT_GUIDE.md covers placing a shape in the room; SIMULATOR_GUIDE.md
-        # covers everything else; players/example_player.py is a worked example.
-        return None
+        self.stats = SearchStats()
+        self.best_score = float("-inf")
+        best = None
+        stock = self.inventory.copy()
+        room_area = self.room.polygon.buffer(TOL)
+        choices = [
+            Connector(kind, reflex)
+            for kind in ConnectorType
+            for reflex in (
+                (False,) if kind == ConnectorType.STRAIGHT else (False, True)
+            )
+        ]
+        pieces = []
+        # Internal joints only. The root's closing joint is chosen at closure.
+        joints = []
+        points = [self.start]
+
+        def endpoint(heading, length):
+            theta = math.radians(heading)
+            x, y = points[-1]
+            return x + length * math.cos(theta), y + length * math.sin(theta)
+
+        def search(heading, face_length):
+            nonlocal best
+            self.stats.nodes += 1
+            closed = math.dist(points[-1], self.start) <= TOL
+            if closed:
+                if len(pieces) >= MIN_ENCLOSURE_PIECES:
+                    for closing in choices:
+                        if stock.connectors.get(closing.connector_type, 0) <= 0:
+                            continue
+                        gap = (
+                            heading + closing.turn_angle() - self.start_heading
+                        ) % 360
+                        if min(gap, 360 - gap) > ANGLE_TOL:
+                            continue
+                        candidate = Construction(
+                            self.start,
+                            self.start_heading,
+                            list(pieces),
+                            [closing, *joints],
+                        )
+                        self.stats.closed_candidates += 1
+                        result = validate_construction(
+                            candidate, self.room, self.inventory
+                        )
+                        if result.valid:
+                            self.stats.valid_polygons += 1
+                            score = score_construction(result, self.weights)
+                            if score > self.best_score:
+                                best, self.best_score = candidate, score
+                # Extending a closed loop would revisit a vertex: never simple.
+                return
+
+            # One extra connector is always required to close at the root.
+            if sum(stock.walls.values()) == 0 or stock.count_connectors() < 2:
+                self.stats.exhausted_leaves += 1
+                return
+
+            for joint in choices:
+                if not stock.take_connector(joint.connector_type):
+                    continue
+                next_heading = heading + joint.turn_angle()
+                for length, count in stock.walls.items():
+                    if count <= 0:
+                        continue
+                    next_face = face_length + length if joint.is_straight() else length
+                    if next_face > MAX_FACE_LENGTH + TOL:
+                        self.stats.face_prunes += 1
+                        continue
+                    end = endpoint(next_heading, length)
+                    if not room_area.covers(LineString([points[-1], end])):
+                        self.stats.boundary_prunes += 1
+                        continue
+                    # Snap only the simplicity check to handle floating point
+                    # closure. Keep actual coordinates for the official judge.
+                    check_end = self.start if math.dist(end, self.start) <= TOL else end
+                    if not LineString([*points, check_end]).is_simple:
+                        self.stats.crossing_prunes += 1
+                        continue
+                    stock.walls[length] -= 1
+                    pieces.append(Piece(PieceType.WALL, length))
+                    joints.append(joint)
+                    points.append(end)
+                    search(next_heading, next_face)
+                    points.pop()
+                    joints.pop()
+                    pieces.pop()
+                    stock.walls[length] += 1
+                stock.connectors[joint.connector_type] += 1
+
+        for length, count in sorted(stock.gates.items()):
+            if count <= 0 or (
+                self.gate_length is not None and length != self.gate_length
+            ):
+                continue
+            if length > MAX_FACE_LENGTH + TOL:
+                self.stats.face_prunes += 1
+                continue
+            end = endpoint(self.start_heading, length)
+            if not room_area.covers(LineString([self.start, end])):
+                self.stats.boundary_prunes += 1
+                continue
+            stock.gates[length] -= 1
+            pieces.append(Piece(PieceType.GATE, length))
+            points.append(end)
+            search(self.start_heading, length)
+            points.pop()
+            pieces.pop()
+            stock.gates[length] += 1
+
+        outcome = (
+            f"best score {self.best_score:g}" if best is not None else "no solution"
+        )
+        self.note = (
+            f"Exhaustive fixed-gate search: {self.stats.nodes} nodes, "
+            f"{self.stats.valid_polygons} valid polygons; {outcome}"
+        )
+        return best
