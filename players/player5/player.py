@@ -25,7 +25,7 @@ class SearchStats:
 class Player5(Player):
     """Enumerate every wall/connector chain rooted at a fixed starting gate.
 
-    Defaults to the first room vertex, pointing along its outgoing edge.
+    Defaults to centering the gate along the longest room edge.
     Optional keyword arguments fix another pose or a particular gate length.
     No beam width, depth cap, early success exit, or internal time limit: the
     simulator's CPU limit still applies. Only tiny inventories are practical.
@@ -43,10 +43,18 @@ class Player5(Player):
     ):
         super().__init__(room, inventory, weights)
         corners = room.get_boundary_points()
-        self.start = tuple(corners[0] if start is None else start)
+        edge_start, edge_end = max(
+            zip(corners, corners[1:] + corners[:1]),
+            key=lambda edge: math.dist(*edge),
+        )
+        self.edge_midpoint = (
+            (edge_start[0] + edge_end[0]) / 2,
+            (edge_start[1] + edge_end[1]) / 2,
+        )
+        self.start = None if start is None else tuple(start)
         self.start_heading = (
             math.degrees(
-                math.atan2(corners[1][1] - corners[0][1], corners[1][0] - corners[0][0])
+                math.atan2(edge_end[1] - edge_start[1], edge_end[0] - edge_start[0])
             )
             if start_heading is None
             else start_heading
@@ -71,7 +79,8 @@ class Player5(Player):
         pieces = []
         # Internal joints only. The root's closing joint is chosen at closure.
         joints = []
-        points = [self.start]
+        points = []
+        start = None
 
         def endpoint(heading, length):
             theta = math.radians(heading)
@@ -81,7 +90,7 @@ class Player5(Player):
         def search(heading, face_length):
             nonlocal best
             self.stats.nodes += 1
-            closed = math.dist(points[-1], self.start) <= TOL
+            closed = math.dist(points[-1], start) <= TOL
             if closed:
                 if len(pieces) >= MIN_ENCLOSURE_PIECES:
                     for closing in choices:
@@ -93,7 +102,7 @@ class Player5(Player):
                         if min(gap, 360 - gap) > ANGLE_TOL:
                             continue
                         candidate = Construction(
-                            self.start,
+                            start,
                             self.start_heading,
                             list(pieces),
                             [closing, *joints],
@@ -132,7 +141,7 @@ class Player5(Player):
                         continue
                     # Snap only the simplicity check to handle floating point
                     # closure. Keep actual coordinates for the official judge.
-                    check_end = self.start if math.dist(end, self.start) <= TOL else end
+                    check_end = start if math.dist(end, start) <= TOL else end
                     if not LineString([*points, check_end]).is_simple:
                         self.stats.crossing_prunes += 1
                         continue
@@ -155,8 +164,18 @@ class Player5(Player):
             if length > MAX_FACE_LENGTH + TOL:
                 self.stats.face_prunes += 1
                 continue
+            theta = math.radians(self.start_heading)
+            start = (
+                self.start
+                if self.start is not None
+                else (
+                    self.edge_midpoint[0] - length * math.cos(theta) / 2,
+                    self.edge_midpoint[1] - length * math.sin(theta) / 2,
+                )
+            )
+            points[:] = [start]
             end = endpoint(self.start_heading, length)
-            if not room_area.covers(LineString([self.start, end])):
+            if not room_area.covers(LineString([start, end])):
                 self.stats.boundary_prunes += 1
                 continue
             stock.gates[length] -= 1

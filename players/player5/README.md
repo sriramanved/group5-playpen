@@ -8,12 +8,13 @@ uv run main.py --player 5 --scenario scenarios/players/player5/tiny_exhaustive.j
 
 It has one 5-unit gate, three 5-unit walls, and four right connectors in a
 10-by-10 room. The optimum is a 5-by-5 square: area 25, perimeter 20,
-score `1000 + 2*25 - 20 = 1030`. The full search visits 8 nodes and finds
+score `1000 + 2*25 - 20 = 1030`. The full search visits 5 nodes and finds
 one valid polygon.
 
-This simple version uses exactly one gate. Its start defaults to the room's
-first vertex and its heading follows the first room edge. It tries every
-available gate length at that pose. To fix a different pose or gate length:
+This simple version uses exactly one gate. By default it centers the gate
+on the longest room edge and points along that edge. Tied edges use the first
+one in the room's vertex order, including the closing edge. It tries every
+available gate length, keeping each centered on the same edge midpoint. To fix a different pose or gate length:
 
 ```python
 from players.player5.player import Player5

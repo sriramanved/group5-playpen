@@ -19,6 +19,7 @@ DIAGONAL = ConnectorType.DIAGONAL
 
 class ExhaustiveSearchTests(unittest.TestCase):
     def player(self, walls=None, gates=None, connectors=None, room=None, **kwargs):
+        kwargs.setdefault("start", (0, 0))
         return Player5(
             Room(Polygon(room or [(0, 0), (20, 0), (20, 20), (0, 20)])),
             Inventory(
@@ -36,6 +37,26 @@ class ExhaustiveSearchTests(unittest.TestCase):
         result = validate_construction(construction, player.room, player.inventory)
         self.assertTrue(result.valid, result.reason)
         return construction, result
+
+    def test_default_gate_is_centered_on_longest_edge(self):
+        # Longest edge closes the room ring; it is vertical and points south.
+        room = [(0, 0), (8, 0), (8, 8), (0, 11)]
+        player = self.player(room=room, start=None)
+        construction, _ = self.validated(player)
+        self.assertAlmostEqual(construction.start[0], 0)
+        self.assertAlmostEqual(construction.start[1], 8)
+        self.assertAlmostEqual(construction.start_heading, -90)
+
+    def test_default_centers_each_gate_length_independently(self):
+        for gate_length in (5, 10):
+            with self.subTest(gate_length=gate_length):
+                player = self.player(
+                    walls={gate_length: 3}, gates={gate_length: 1}, start=None
+                )
+                construction, _ = self.validated(player)
+                self.assertAlmostEqual(construction.start[0], (20 - gate_length) / 2)
+                self.assertAlmostEqual(construction.start[1], 0)
+                self.assertAlmostEqual(construction.start_heading, 0)
 
     def test_tiny_square_and_repeatability(self):
         player = self.player(room=[(0, 0), (5, 0), (5, 5), (0, 5)])
