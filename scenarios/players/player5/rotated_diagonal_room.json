@@ -1,0 +1,55 @@
+{
+  "_description": "Exact-fitting regular octagon rotated 23 degrees, with only diagonal connectors. Tests room-edge heading placement and a valid non-rectangle fallback when no right or straight connectors exist.",
+  "room": [
+    [
+      12.0,
+      12.0
+    ],
+    [
+      16.602524,
+      13.953656
+    ],
+    [
+      18.475557,
+      18.589575
+    ],
+    [
+      16.521902,
+      23.192099
+    ],
+    [
+      11.885982,
+      25.065132
+    ],
+    [
+      7.283458,
+      23.111477
+    ],
+    [
+      5.410425,
+      18.475557
+    ],
+    [
+      7.364081,
+      13.873033
+    ]
+  ],
+  "inventory": {
+    "walls": {
+      "5": 7
+    },
+    "gates": {
+      "5": 1
+    },
+    "connectors": {
+      "straight": 0,
+      "right": 0,
+      "diagonal": 8
+    }
+  },
+  "weights": {
+    "A": 2.0,
+    "C": -1.0,
+    "G": 0.0
+  }
+}

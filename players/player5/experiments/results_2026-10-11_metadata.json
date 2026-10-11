@@ -1,0 +1,79 @@
+{
+  "run_date": "2026-10-11",
+  "scope": "experiments-1 review experiment; not the final deliverable",
+  "base_commit": "3decb8c126fe109995e4949cd5db838cd9754513",
+  "suite_commit": "f94d6a90c0811ac719c7689fd304d6197fcfd8c1",
+  "parameters": {
+    "cpu_limit": 300.0,
+    "internal_budget": 240,
+    "path_cap": 4,
+    "frontier_width": 8
+  },
+  "workers": 6,
+  "runtime": {
+    "python": "3.13.16",
+    "shapely": "2.1.2",
+    "numpy": "2.5.3"
+  },
+  "source_sha256": {
+    "incremental": "91608ca1ca7bbe54a24566e3c60e1e1bc27aaca7bc459687691df31b6a24e9cf",
+    "benchmark": "001f23d0d573449fc74b7183eac2adfd1fa7030fddf647bd85f5783ae0df7aed"
+  },
+  "scenario_sha256": {
+    "scenarios/players/player5/tiny_exhaustive.json": "009f3674c0c7526ba477345955814d554ee954d596a99868d5843ccbe73ba536",
+    "scenarios/players/player5/rotated_diagonal_room.json": "1d33880e34b64325db0c8afd9dbfa5624b7a9a843482bd2e80ca36d024c7e91f"
+  },
+  "procedure": {
+    "runs_per_case": 1,
+    "process": "A fresh process for each case; the player itself runs sequentially.",
+    "cpu_seconds": "Player construction plus build_enclosure(), excluding imports, scenario loading, and independent output validation.",
+    "score": "Official score: 1000 + A*area + C*perimeter + G when separate faces contain gates. None/timeouts count as 0, invalid output as -1000, and errors as 0 for comparison only.",
+    "first_valid_cpu_seconds": "Time inside build_enclosure() until it first retains a validated enclosure; excludes player construction.",
+    "best_seed_score": "Best validated score before local replacements in this run, not a separate full-budget seed-only comparison.",
+    "missing_csv_values": "Blank means unavailable, including geometry and first-valid time for None outcomes."
+  },
+  "summary": {
+    "cases": 37,
+    "outcomes": {
+      "valid": 35,
+      "none": 2
+    },
+    "total_score": 215543.9355740792,
+    "mean_score": 5825.51177227241,
+    "median_score": 1862.2813126546318,
+    "total_cpu_seconds": 605.270456875,
+    "maximum_cpu_seconds": 119.767781943,
+    "slowest_first_valid_cpu_seconds": 1.9587188649999998,
+    "published_group_cases": 28,
+    "published_group_valid_results": 28
+  },
+  "checks": {
+    "unit_tests": {
+      "count": 34,
+      "result": "passed",
+      "command": "uv run python -m unittest players.player5.test_search players.player5.test_anytime"
+    },
+    "submission_check": {
+      "result": "CHECK PASSED",
+      "command": "uv run python -m scripts.check_submission 5"
+    },
+    "lint": "Ruff passed for player.py, benchmark.py and test_anytime.py.",
+    "geometry": "All 35 returned constructions independently passed official validation; stored scores, area and perimeter matched recomputation.",
+    "new_regressions": [
+      "Buffered containment tolerance for square, hexagon and octagon seeds.",
+      "Empty benchmark scenario selection is rejected."
+    ]
+  },
+  "baseline_extra_recheck": {
+    "source_commit": "3decb8c126fe109995e4949cd5db838cd9754513",
+    "source_sha256": "bb0ff1b661623a02ef359bbf53a1cab3e72e554132b9bb23d890db00d82cacd1",
+    "benchmark_sha256": "001f23d0d573449fc74b7183eac2adfd1fa7030fddf647bd85f5783ae0df7aed",
+    "scenario": "scenarios/players/player5/rotated_diagonal_room.json",
+    "status": "valid",
+    "score": 1201.4213562373095,
+    "cpu_seconds": 0.0010472950000000036,
+    "interpretation": "The preserved baseline reproduces the historical extra-room status and score; this does not recover the ambiguous legacy hash from the historical report."
+  },
+  "interpretation": "This verifies the reviewed source on the pinned suite. Archived October 9 measurements concern their recorded source versions. Time-limited search and execution costs change which candidates are explored; single runs establish neither fixed margins nor global optimality.",
+  "reproduce_command": "uv run python -m players.player5.benchmark --suite-ref f94d6a90c0811ac719c7689fd304d6197fcfd8c1 --algorithm incremental --cpu-limit 300 --workers 6 --output /tmp/group5-reviewed.json"
+}

@@ -1,0 +1,193 @@
+{
+  "purpose": "Archived measurements supporting the experiments-1 review branch; not the final deliverable.",
+  "measurement_date": "2026-10-09",
+  "results_file": "results_2026-10-09.csv",
+  "suite": {
+    "upstream_commit": "f94d6a90c0811ac719c7689fd304d6197fcfd8c1",
+    "cases": 37,
+    "published_group_cases": 28,
+    "shared_cases": 7,
+    "additional_cases": [
+      "scenarios/players/player5/tiny_exhaustive.json",
+      "scenarios/players/player5/rotated_diagonal_room.json"
+    ],
+    "official_30_case_roster": "Not identified in the pinned input files."
+  },
+  "protocol": {
+    "trials_per_case_per_variant": 1,
+    "cpu_limit_seconds": 300,
+    "improved_and_reference_internal_budget_seconds": 240,
+    "path_cap": 4,
+    "frontier_width": {
+      "reference": 8,
+      "improved": 8,
+      "width1": 1
+    },
+    "fresh_process_per_case": true,
+    "cpu_measurement": "time.process_time() inside CpuLimit: player construction plus build_enclosure(); excludes imports, scenario loading and validation after the player returns.",
+    "score_measurement": "Official score for a returned construction (invalid constructions score -1000); None and timeouts score 0; crashes are recorded as errors and charged 0 only for comparison totals.",
+    "aggregate_score": "Sum of all 37 case scores; cases are not normalized or weighted.",
+    "aggregate_cpu": "Sum of CPU seconds over the same 37 cases.",
+    "timing_limitation": "Time-based stopping can change which candidates survive; these are single observed runs, without confidence intervals."
+  },
+  "variants": {
+    "baseline": {
+      "description": "Preserved fixed-gate exhaustive player in baseline.py; no internal budget, path cap, or frontier.",
+      "original_commit": "3decb8c126fe109995e4949cd5db838cd9754513",
+      "preserved_source_sha256": "bb0ff1b661623a02ef359bbf53a1cab3e72e554132b9bb23d890db00d82cacd1",
+      "source_reports": [
+        {
+          "file": "full_baseline.json",
+          "report_sha256": "54aaf8148d41255b2fb23ba205e5c9009a193405952615bc0f57adda4bf0737a",
+          "recorded_legacy_player_sha256": "bb0ff1b661623a02ef359bbf53a1cab3e72e554132b9bb23d890db00d82cacd1"
+        },
+        {
+          "file": "full_baseline_extra.json",
+          "report_sha256": "5a1b388fe1bddc9c0957d61332788c31f50e8ddf0255e41ea9dc7a01f0488fb0",
+          "recorded_legacy_player_sha256": "2ed8e09954ebf8ad20f78d245a1129fdbf51f16fe32b6671b643febad4df6a16"
+        }
+      ],
+      "legacy_hash_limitation": "The extra-room report has a generic player_sha256 field that differs from the preserved baseline hash; it does not establish the selected baseline source. The row identifies algorithm=baseline. The original report field is retained here without reinterpretation."
+    },
+    "reference": {
+      "description": "Player before performance changes; frozen before editing and rerun.",
+      "player_source_sha256": "27c776a6268f8c88312826f66fd4fa502d7f7ae9f099fe6aff95be3abdf21936",
+      "benchmark_source_sha256": "67573655dae0d5e8c78fadd5a254b073b1b9187755b52acc73bfd2a54b18cb81",
+      "source_report": "performance_full_comparison.json (reference rows only)",
+      "source_report_sha256": "2b50cc555357f026bcae36ecb0f310c0785e57b6b6ecf8cb44bae3a5cd9e72a4"
+    },
+    "improved": {
+      "description": "Optimized player before later review edits; four-piece paths and frontier width eight.",
+      "player_source_sha256": "a04cdceda37b31393025c38820aeb54fc2fc3d73f00f549d0b785c6f3a6a8b4c",
+      "benchmark_source_sha256": "67573655dae0d5e8c78fadd5a254b073b1b9187755b52acc73bfd2a54b18cb81",
+      "source_report": "performance_final_full.json",
+      "source_report_sha256": "915bd1ad4b161d4735a8bcabf11d71857912f31ba424681b7844b6b6d8e05e79"
+    },
+    "width1": {
+      "description": "The same archived optimized source, with frontier width one.",
+      "player_source_sha256": "a04cdceda37b31393025c38820aeb54fc2fc3d73f00f549d0b785c6f3a6a8b4c",
+      "benchmark_source_sha256": "67573655dae0d5e8c78fadd5a254b073b1b9187755b52acc73bfd2a54b18cb81",
+      "source_report": "performance_width1_full.json",
+      "source_report_sha256": "31611566c0fb83bdaf8084e37b2ebbd9a95c859661611430ec1c075855195555"
+    }
+  },
+  "reproduction_limitation": "The previous uncommitted source and full reports are archived outside this repository. Exact historical reruns require those sources and the recorded hashes; running the current branch evaluates its current source, which has later readability and correctness edits.",
+  "summaries": {
+    "baseline": {
+      "cases": 37,
+      "statuses": {
+        "error": 3,
+        "none": 4,
+        "timeout": 23,
+        "valid": 7
+      },
+      "total_score": 9749.42135623731,
+      "mean_score": 263.4978744929003,
+      "median_score": 0.0,
+      "total_cpu_seconds": 7349.148553836,
+      "maximum_cpu_seconds": 310.95409024
+    },
+    "reference": {
+      "cases": 37,
+      "statuses": {
+        "none": 2,
+        "valid": 35
+      },
+      "total_score": 199382.21063611962,
+      "mean_score": 5388.7083955708,
+      "median_score": 1862.2813126546318,
+      "total_cpu_seconds": 714.213175855,
+      "maximum_cpu_seconds": 90.149235867
+    },
+    "improved": {
+      "cases": 37,
+      "statuses": {
+        "none": 2,
+        "valid": 35
+      },
+      "total_score": 239048.58020951174,
+      "mean_score": 6460.772438094912,
+      "median_score": 1862.2813126546318,
+      "total_cpu_seconds": 355.385566944,
+      "maximum_cpu_seconds": 140.859509782
+    },
+    "width1": {
+      "cases": 37,
+      "statuses": {
+        "none": 2,
+        "valid": 35
+      },
+      "total_score": 232055.64601642796,
+      "mean_score": 6271.774216660215,
+      "median_score": 1862.2813126546318,
+      "total_cpu_seconds": 213.719527616,
+      "maximum_cpu_seconds": 74.731297104
+    }
+  },
+  "comparisons": {
+    "improved_vs_baseline": {
+      "score_tolerance": 1e-06,
+      "wins": 31,
+      "ties": 5,
+      "losses": 1,
+      "loss_details": [
+        {
+          "scenario": "scenarios/players/player10/zig_room.json",
+          "score_difference": -50.0
+        }
+      ]
+    },
+    "improved_vs_reference": {
+      "score_tolerance": 1e-06,
+      "wins": 7,
+      "ties": 27,
+      "losses": 3,
+      "loss_details": [
+        {
+          "scenario": "scenarios/B.json",
+          "score_difference": -55.0
+        },
+        {
+          "scenario": "scenarios/invalid_examples.json",
+          "score_difference": -24.074892956472468
+        },
+        {
+          "scenario": "scenarios/players/player7/horseshoe_room.json",
+          "score_difference": -20.000000000000227
+        }
+      ]
+    },
+    "improved_vs_width1": {
+      "score_tolerance": 1e-06,
+      "wins": 8,
+      "ties": 28,
+      "losses": 1,
+      "loss_details": [
+        {
+          "scenario": "scenarios/players/player9/32_edge_concave_room.json",
+          "score_difference": -39.999999999990905
+        }
+      ]
+    }
+  },
+  "recorded_errors": [
+    {
+      "variant": "baseline",
+      "scenario": "scenarios/players/player2/cool.json",
+      "status": "error",
+      "detail": "ValueError: piece length must be >= 5, got 4"
+    },
+    {
+      "variant": "baseline",
+      "scenario": "scenarios/players/player2/hard.json",
+      "status": "error",
+      "detail": "ValueError: piece length must be >= 5, got 4"
+    },
+    {
+      "variant": "baseline",
+      "scenario": "scenarios/players/player2/simple_room.json",
+      "status": "error",
+      "detail": "ValueError: piece length must be >= 5, got 1"
+    }
+  ]
+}

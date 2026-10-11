@@ -5,7 +5,7 @@ import unittest
 
 from shapely.geometry import Polygon
 
-from players.player5.player import Player5
+from players.player5.baseline import Player5
 from src.enclosure import Construction, score_construction, validate_construction
 from src.inventory import Inventory
 from src.pieces import Connector, ConnectorType, Piece, PieceType
