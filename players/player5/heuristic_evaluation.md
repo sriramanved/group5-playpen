@@ -1,5 +1,7 @@
 # Turn and final-wall pruning evaluation
 
+Historical experiment: these timed runs used the previous shared **CPU-time** budget. The current player uses a shared **elapsed-time** deadline instead; these timed scores and worker comparisons must not be read as results for that new limit. Unbounded exhaustive correctness/node-count results remain applicable.
+
 Four configurations were run across all 29 player scenarios. All retain the existing Euclidean-distance pruning, fixed gate placement, and one-gate model. Each uses four processes sharing a five-second CPU budget, with 4.5 seconds allocated to workers and their startup. The full-suite comparison is one run per scenario/configuration; budget-limited results are sensitive to startup and execution costs and are not optimality claims.
 
 ## Full scenario suite
@@ -77,6 +79,6 @@ Both rules are enabled by default and can be disabled independently. Turn feasib
 
 ## Reproduction and validation
 
-See README.md for the four benchmark commands and constructor switches. Raw JSON files are in logs/player5-heuristics-*-5s.json; confirmation runs use *-repeat1.json and *-repeat2.json. Run the standalone benchmark with Python that includes Tkinter.
+These historical timed runs used commit d241ed7. The current README and benchmark use elapsed time, so their commands do not reproduce this old CPU-budget experiment. Raw JSON files are in logs/player5-heuristics-*-5s.json; confirmation runs use *-repeat1.json and *-repeat2.json. Run the standalone benchmark with Python that includes Tkinter.
 
 Validation: 23 search tests, including exact turn-feasibility comparison with independent connector-subset enumeration and exhaustive before/after polygon-count checks; 19 simulator geometry tests; Group 5 submission structure/style/smoke checks at a five-second limit.

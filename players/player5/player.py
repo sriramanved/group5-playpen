@@ -8,6 +8,11 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, fields
 from functools import lru_cache
 
+try:
+    import resource
+except ImportError:  # Windows: search CPU is an estimate without child accounting.
+    resource = None
+
 from shapely.geometry import LineString
 
 from players.player0 import Player
@@ -61,13 +66,19 @@ def _turn_completion_possible(turns, right, diagonal, straight, minimum, maximum
     return False
 
 
-class _BudgetExpired(Exception):
+class _DeadlineReached(Exception):
     pass
 
 
-def _run_partition(player, partition, partitions, budget):
-    # Spawned workers are fresh processes: include their Python startup CPU.
-    return player._search_partition(partition, partitions, budget, cpu_start=0.0)
+def _children_cpu_seconds():
+    if resource is None:
+        return None
+    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return usage.ru_utime + usage.ru_stime
+
+
+def _run_partition(player, partition, partitions, deadline):
+    return player._search_partition(partition, partitions, deadline)
 
 
 class Player5(Player):
@@ -76,8 +87,9 @@ class Player5(Player):
     Defaults to centering the gate along the longest room edge.
     Optional keyword arguments fix another pose or a particular gate length.
     Workers explore disjoint first-wall branches. The default five-second
-    CPU budget is shared across workers; return the best polygon found so far.
-    Set workers=1, cpu_limit=None for the original unbounded exhaustive DFS.
+    elapsed-time deadline is shared across workers, including process startup.
+    Return the best polygon found so far. Set workers=1, time_limit=None for
+    the unbounded exhaustive DFS.
     """
 
     def __init__(
@@ -90,7 +102,7 @@ class Player5(Player):
         start_heading=None,
         gate_length=None,
         workers=None,
-        cpu_limit=5.0,
+        time_limit=5.0,
         distance_pruning=True,
         turn_pruning=True,
         final_wall_pruning=True,
@@ -115,46 +127,51 @@ class Player5(Player):
         )
         if workers is not None and (not isinstance(workers, int) or workers < 1):
             raise ValueError("workers must be a positive integer")
-        if cpu_limit is not None and (not math.isfinite(cpu_limit) or cpu_limit <= 0):
-            raise ValueError("cpu_limit must be finite and positive, or None")
+        if time_limit is not None and (
+            not math.isfinite(time_limit) or time_limit <= 0
+        ):
+            raise ValueError("time_limit must be finite and positive, or None")
         self.workers = min(4, os.cpu_count() or 1) if workers is None else workers
-        self.cpu_limit = cpu_limit
+        self.time_limit = time_limit
         self.distance_pruning = distance_pruning
         self.turn_pruning = turn_pruning
         self.final_wall_pruning = final_wall_pruning
         self.search_complete = False
         self.search_cpu_seconds = 0.0
+        self.search_wall_seconds = 0.0
         self.gate_length = gate_length
         self.stats = SearchStats()
         self.best_score = float("-inf")
 
     def build_enclosure(self) -> Construction | None:
-        started = time.process_time()
-        # Reserve parent orchestration CPU, which the simulator also counts.
-        budget = (
-            None
-            if self.cpu_limit is None
-            else max(self.cpu_limit * 0.8, self.cpu_limit - 0.5)
-        )
+        wall_started = time.monotonic()
+        cpu_started = time.process_time()
+        children_started = _children_cpu_seconds()
+        # The same absolute deadline goes to every task. It is never divided
+        # by worker count or restarted when a worker begins execution.
+        deadline = None if self.time_limit is None else wall_started + self.time_limit
         if self.workers == 1:
-            results = [self._search_partition(0, 1, budget)]
-            worker_cpu = 0.0  # already included in this process's CPU time
+            results = [self._search_partition(0, 1, deadline)]
+            worker_cpu = 0.0
         else:
-            worker_budget = None if budget is None else budget / self.workers
             with ProcessPoolExecutor(
                 max_workers=self.workers,
                 mp_context=multiprocessing.get_context("spawn"),
             ) as pool:
                 futures = [
-                    pool.submit(_run_partition, self, i, self.workers, worker_budget)
+                    pool.submit(_run_partition, self, i, self.workers, deadline)
                     for i in range(self.workers)
                 ]
                 results = [future.result() for future in futures]
-            worker_cpu = sum(result[4] for result in results)
+            children_finished = _children_cpu_seconds()
+            worker_cpu = (
+                children_finished - children_started
+                if children_started is not None
+                else sum(result[4] for result in results)
+            )
         self.stats = SearchStats()
         self.best_score = float("-inf")
         self.search_complete = all(result[3] for result in results)
-        self.search_cpu_seconds = time.process_time() - started + worker_cpu
         best = None
         for candidate, stats, score, _, _ in results:
             for field in fields(SearchStats):
@@ -165,25 +182,27 @@ class Player5(Player):
                 )
             if candidate is not None and score > self.best_score:
                 best, self.best_score = candidate, score
+        self.search_cpu_seconds = time.process_time() - cpu_started + worker_cpu
+        self.search_wall_seconds = time.monotonic() - wall_started
         outcome = (
             f"best score {self.best_score:g}"
             if best is not None
             else "no solution found"
         )
-        state = "complete" if self.search_complete else "budget reached"
+        state = "complete" if self.search_complete else "deadline reached"
         self.note = (
             f"DFS ({self.workers} workers, {state}): {self.stats.nodes} nodes, "
             f"{self.stats.valid_polygons} valid polygons; {outcome}; "
-            f"total CPU {self.search_cpu_seconds:.2f}s"
+            f"elapsed {self.search_wall_seconds:.2f}s, total CPU {self.search_cpu_seconds:.2f}s"
         )
         return best
 
-    def _search_partition(self, partition, partitions, budget, cpu_start=None):
-        started = time.process_time() if cpu_start is None else cpu_start
+    def _search_partition(self, partition, partitions, deadline):
+        started = time.process_time()
 
-        def check_budget():
-            if budget is not None and time.process_time() - started >= budget:
-                raise _BudgetExpired
+        def check_deadline():
+            if deadline is not None and time.monotonic() >= deadline:
+                raise _DeadlineReached
 
         self.stats = SearchStats()
         self.best_score = float("-inf")
@@ -232,7 +251,7 @@ class Player5(Player):
 
         def search(heading, face_length):
             nonlocal best
-            check_budget()
+            check_deadline()
             self.stats.nodes += 1
             distance_to_start = math.dist(points[-1], start)
             closed = distance_to_start <= TOL
@@ -299,7 +318,7 @@ class Player5(Player):
                     continue
                 next_heading = heading + joint.turn_angle()
                 for wall_index, (length, count) in enumerate(stock.walls.items()):
-                    check_budget()
+                    check_deadline()
                     if (
                         len(pieces) == 1
                         and (joint_index * len(stock.walls) + wall_index) % partitions
@@ -355,7 +374,9 @@ class Player5(Player):
 
         complete = True
         try:
+            check_deadline()
             for length, count in sorted(stock.gates.items()):
+                check_deadline()
                 if (
                     count <= 0
                     or length < MIN_WALL_LENGTH
@@ -387,7 +408,7 @@ class Player5(Player):
                 pieces.pop()
                 stock.gates[length] += 1
 
-        except _BudgetExpired:
+        except _DeadlineReached:
             complete = False
         return (
             best,

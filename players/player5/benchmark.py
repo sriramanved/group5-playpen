@@ -17,9 +17,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scenarios", nargs="*", type=Path)
     parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument("--cpu-limit", type=float, default=5.0)
+    parser.add_argument("--time-limit", type=float, default=5.0)
+    parser.add_argument("--simulator-cpu-limit", type=float, default=300.0)
     parser.add_argument(
-        "--output", type=Path, default=Path("logs/player5-parallel-5s.json")
+        "--output", type=Path, default=Path("logs/player5-parallel-wall-5s.json")
     )
     parser.add_argument("--no-distance-pruning", action="store_true")
     parser.add_argument("--no-turn-pruning", action="store_true")
@@ -40,13 +41,13 @@ def main():
         }
         try:
             scenario = read_scenario(str(path))
-            with CpuLimit(args.cpu_limit) as cpu:
+            with CpuLimit(args.simulator_cpu_limit) as cpu:
                 player = Player5(
                     scenario.room,
                     scenario.inventory,
                     scenario.weights,
                     workers=args.workers,
-                    cpu_limit=args.cpu_limit,
+                    time_limit=args.time_limit,
                     distance_pruning=not args.no_distance_pruning,
                     turn_pruning=not args.no_turn_pruning,
                     final_wall_pruning=not args.no_final_wall_pruning,
@@ -63,7 +64,7 @@ def main():
                 row.update(
                     status="no solution"
                     if player.search_complete
-                    else "budget/no solution",
+                    else "deadline/no solution",
                     score=0,
                 )
             else:
@@ -89,7 +90,14 @@ def main():
         )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(
-            json.dumps({"cpu_limit_seconds": args.cpu_limit, "results": rows}, indent=2)
+            json.dumps(
+                {
+                    "time_limit_seconds": args.time_limit,
+                    "simulator_cpu_limit_seconds": args.simulator_cpu_limit,
+                    "results": rows,
+                },
+                indent=2,
+            )
             + "\n"
         )
     print(f"Totals: {dict(Counter(row['status'] for row in rows))}", flush=True)

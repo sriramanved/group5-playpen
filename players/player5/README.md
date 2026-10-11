@@ -1,38 +1,42 @@
 # Parallel DFS with a fixed starting gate
 
-Run the intentionally tiny example with a five-second CPU limit:
+The player defaults to **five seconds of elapsed time**, with up to four
+worker processes exploring different subtrees concurrently. Every worker gets
+**the same absolute wall-clock deadline**. Time is never divided by worker
+count. Process startup is included in the five-second window; workers starting
+later use the time remaining until that same deadline. Combined CPU usage can
+exceed five seconds when several cores are busy.
+
+Run the tiny example:
 
 ```sh
-uv run main.py --player 5 --scenario scenarios/players/player5/tiny_exhaustive.json --cpu-limit 5 --seed 1
+uv run main.py --player 5 --scenario scenarios/players/player5/tiny_exhaustive.json --seed 1
 ```
 
 It has one 5-unit gate, three 5-unit walls, and four right connectors in a
 10-by-10 room. The optimum is a 5-by-5 square: area 25, perimeter 20,
-score `1000 + 2*25 - 20 = 1030`.
+score `1000 + 2*25 - 20 = 1030`. Searches that exhaust their tree return early.
 
-The default runs up to four worker processes. Each explores a disjoint subset
-of the first connector/wall choices for each gate length. Normal DFS continues
-below those first branches. Workers do not repeat each other's subtrees; each
-initial gate root is visited by each worker, so aggregate node counts include
-those repeated roots. Budgets are fixed per worker; an idle worker's unused
-budget is not redistributed. Results are merged by maximum score.
+Each worker explores a disjoint subset of the first connector/wall choices
+for each gate length. Normal DFS continues below those branches. Workers do
+not repeat each other's subtrees, although each visits the initial gate root.
+The assignment is static: there is no shared task queue or work stealing.
+Results are merged by maximum score.
 
-The default CPU budget is **five seconds shared across workers**, not five
-seconds per worker. The player reserves 0.5 seconds for orchestration, then
-splits the remaining 4.5 seconds evenly. Each fresh worker counts Python
-startup plus its search using `time.process_time()`. Budget checks occur at
-nodes and branch attempts, so an individual operation can overshoot slightly.
-The reported total CPU includes worker startup/search plus parent CPU;
-worker teardown is outside that measurement. The simulator's printed CPU time
-counts only the parent process, which is why the player separately reports
-combined CPU in its note. Wall time also includes startup and scheduling.
+At the deadline, each worker returns its best valid polygon so far. The parent
+returns the highest-scoring polygon. `search_complete` indicates whether the
+entire tree was exhausted; otherwise the result is not a proven optimum.
+If no valid polygon was found, return `None`. Deadline checks are cooperative:
+a native geometry call and process shutdown/result collection can add a small
+amount of time after the search cutoff. All workers are joined before returning.
 
-When the internal budget expires, each worker returns its best valid polygon
-so far. The parent returns the highest-scoring one. `search_complete` says
-whether every partition was exhausted; otherwise the result is only the best
-found within budget, not a proven optimum. If no valid polygon was found,
-return `None`. The simulator's own `--cpu-limit` still applies separately to
-the parent process. Match it to the player's budget when benchmarking.
+`search_wall_seconds` reports elapsed build time. `search_cpu_seconds` reports
+combined parent and child CPU on Unix using OS accounting after workers exit,
+including worker startup and teardown. On platforms without `resource`, the
+CPU figure is an estimate excluding worker startup and teardown. CPU is a
+measurement, not the player's stopping criterion. The simulator's separate
+`--cpu-limit` still limits only the parent process; its default is 300 CPU
+seconds, and its printed CPU figure excludes child workers.
 
 This version uses exactly one gate. By default it centers the gate on the
 longest room edge and points along that edge. Ties use the first edge in the
@@ -50,15 +54,15 @@ player = Player5(
     start_heading=0,
     gate_length=5,
     workers=4,
-    cpu_limit=5,
+    time_limit=5,
 )
 construction = player.build_enclosure()
 print(player.stats, player.best_score, player.search_complete, player.note)
 ```
 
-For the original unbounded exhaustive serial search, pass `workers=1,
-cpu_limit=None`. Programs using multiprocessing must call the player inside
-an `if __name__ == "__main__":` guard. The simulator already does this.
+For unbounded exhaustive serial search, pass `workers=1, time_limit=None`.
+Programs using multiprocessing must call the player inside an
+`if __name__ == "__main__":` guard. The simulator already does this.
 
 At each node DFS appends every available wall length with every available
 connector, including both flipped orientations of right and diagonal
@@ -69,76 +73,57 @@ at every depth, so solutions may leave inventory unused. Inventory is copied
 before use. Lengths below the simulator's five-unit minimum are unusable and
 skipped, including those present in some upstream scenarios.
 
-Distance pruning rejects a branch when its endpoint's straight-line distance
-back to the gate start exceeds the maximum total length of walls it could
-still add (plus the simulator's closure tolerance). It sums the longest
-remaining usable walls, limited to `remaining connectors - 1` wall slots,
-reserving a connector for closure. For example, if the start is 18 units away
-but the remaining walls can span at most 15 units, closure is impossible.
-This is a safe upper bound by the triangle inequality; equality is allowed.
-It ignores turns and obstacles, so it can retain impossible paths but cannot
-exclude a valid completion. `stats.distance_prunes` counts rejected nodes.
-Set `distance_pruning=False` or benchmark with `--no-distance-pruning` for an
-otherwise identical comparison.
+Three additional pruning rules are enabled by default:
 
-Turn pruning tracks the accumulated turn in 45-degree units. A simple closed
-polygon must finish at either +360 or -360 degrees. A cached integer check
-asks whether any subset of the remaining right (+/-90), diagonal (+/-45),
-and straight (0) connectors can supply the missing turn. It respects both
-the minimum joints needed to form a polygon and the maximum joints allowed
-by the remaining usable walls. Unused inventory is allowed. Both clockwise
-and counterclockwise loops remain possible. `stats.turn_prunes` counts
-rejected nodes; set `turn_pruning=False` to disable this check.
+- **Euclidean distance:** prune if the endpoint's distance to the start exceeds
+  the maximum length of walls it can still add, reserving one connector for
+  closure. The triangle inequality makes this a safe upper bound.
+- **Turn feasibility:** a simple polygon must finish at total turn +360 or
+  -360 degrees. A cached integer check determines whether any subset of the
+  remaining connectors can supply the missing turn within the remaining wall
+  and connector counts. Both winding directions and unused pieces are allowed.
+- **Final wall:** if at most one more wall can be added, reject choices unless
+  that wall actually reaches the start within tolerance and a remaining
+  connector restores the initial heading. This check precedes expensive geometry.
 
-Final-wall pruning applies when inventory permits at most one additional
-wall (limited by walls and by connectors, reserving one for closure). Before
-expensive geometry checks, it rejects each connector/wall choice unless that
-wall ends within the Euclidean closure tolerance of the start and a remaining
-closing connector restores the original heading. It checks the actual endpoint
-rather than approximating the required wall direction. The official validator
-still checks the complete polygon. `stats.final_wall_prunes` counts rejected
-wall choices; set `final_wall_pruning=False` to disable this check.
+The constructor switches are `distance_pruning`, `turn_pruning`, and
+`final_wall_pruning`. Corresponding `stats.*_prunes` counters report rejected
+nodes for distance/turn checks and rejected wall choices for final-wall checks.
 
-Dead branches stop when they leave the room (checking the whole wall even in
-concave rooms), cross/touch earlier walls, exceed the 30-unit straight-face
+Other dead branches stop when they leave the room (checking the whole wall even
+in concave rooms), cross/touch earlier walls, exceed the 30-unit straight-face
 limit, or lack walls/connectors. Touching the room boundary is allowed. One
 connector is reserved for closure. The official validator checks faces that
 wrap across the gate. A closed chain is a leaf.
 
-Without a budget, enumeration is exhaustive for the chosen pose and one-gate
+Without a deadline, enumeration is exhaustive for the chosen pose and one-gate
 model, not over continuous placements or constructions with extra gates.
-Runtime grows exponentially. Parallelism reduces elapsed time and visits
-different subtrees sooner, but cannot guarantee a better score under the same
-total CPU budget. Recursive traversal remains intended for small inventories.
+Runtime grows exponentially; recursive traversal is intended for small
+inventories. More workers do not necessarily mean more useful search on a
+fixed machine, because of startup, scheduling, and static partition imbalance.
 
 Run tests and benchmark all player scenarios:
 
 ```sh
 uv run python -m unittest players.player5.test_search
 uv run python -m scripts.check_submission 5 --cpu-limit 5
-uv run python -m players.player5.benchmark --workers 4 --cpu-limit 5
+uv run python -m players.player5.benchmark --workers 4 --time-limit 5
 ```
 
 The benchmark writes scores, completion status, node counts, combined CPU,
-simulator CPU, and wall time to `logs/player5-parallel-5s.json`. Pass scenario
-paths to run a subset, `--workers 1` for serial comparison, or `--output PATH`
-to change the report location. For an ablation comparison that keeps distance
-pruning enabled:
+simulator CPU, and elapsed time to `logs/player5-parallel-wall-5s.json`.
+Pass scenario paths for a subset, `--workers 64` to compare worker counts,
+`--output PATH` to change the report location, or `--no-distance-pruning`,
+`--no-turn-pruning`, and `--no-final-wall-pruning` for ablation experiments.
+`--simulator-cpu-limit` controls the separate parent CPU guard (default 300).
 
-```sh
-# Baseline: distance pruning alone
-uv run python -m players.player5.benchmark --no-turn-pruning --no-final-wall-pruning --output logs/baseline.json
-# Turn pruning alone added
-uv run python -m players.player5.benchmark --no-final-wall-pruning --output logs/turn.json
-# Final-wall pruning alone added
-uv run python -m players.player5.benchmark --no-turn-pruning --output logs/final-wall.json
-# Both added (the default)
-uv run python -m players.player5.benchmark --output logs/both.json
-```
+[elapsed_time_evaluation.md](elapsed_time_evaluation.md) reports current
+four-worker scenario results and the corrected comparison with 64 workers.
 
-All four commands default to four workers sharing a five-second CPU budget.
-See [heuristic_evaluation.md](heuristic_evaluation.md) for measured results,
-including repeated runs of the scenario near the budget boundary.
+[heuristic_evaluation.md](heuristic_evaluation.md) records the earlier
+CPU-budget experiment. Its timed scenario results do not describe the current
+elapsed-time deadline. Its unbounded exhaustive correctness/node-count results
+remain applicable.
 
 The simulator imports Tkinter even in headless mode. Use a Python installation
 with Tkinter available, as described in the repository setup instructions.
