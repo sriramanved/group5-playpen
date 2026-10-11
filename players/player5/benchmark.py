@@ -22,6 +22,8 @@ def main():
         "--output", type=Path, default=Path("logs/player5-parallel-5s.json")
     )
     parser.add_argument("--no-distance-pruning", action="store_true")
+    parser.add_argument("--no-turn-pruning", action="store_true")
+    parser.add_argument("--no-final-wall-pruning", action="store_true")
     args = parser.parse_args()
     scenarios = args.scenarios or sorted(
         Path("scenarios/players").glob("player*/*.json")
@@ -33,6 +35,8 @@ def main():
             "scenario": str(path),
             "workers": args.workers,
             "distance_pruning": not args.no_distance_pruning,
+            "turn_pruning": not args.no_turn_pruning,
+            "final_wall_pruning": not args.no_final_wall_pruning,
         }
         try:
             scenario = read_scenario(str(path))
@@ -44,6 +48,8 @@ def main():
                     workers=args.workers,
                     cpu_limit=args.cpu_limit,
                     distance_pruning=not args.no_distance_pruning,
+                    turn_pruning=not args.no_turn_pruning,
+                    final_wall_pruning=not args.no_final_wall_pruning,
                 )
                 candidate = player.build_enclosure()
             row.update(

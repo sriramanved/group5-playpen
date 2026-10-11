@@ -81,6 +81,24 @@ exclude a valid completion. `stats.distance_prunes` counts rejected nodes.
 Set `distance_pruning=False` or benchmark with `--no-distance-pruning` for an
 otherwise identical comparison.
 
+Turn pruning tracks the accumulated turn in 45-degree units. A simple closed
+polygon must finish at either +360 or -360 degrees. A cached integer check
+asks whether any subset of the remaining right (+/-90), diagonal (+/-45),
+and straight (0) connectors can supply the missing turn. It respects both
+the minimum joints needed to form a polygon and the maximum joints allowed
+by the remaining usable walls. Unused inventory is allowed. Both clockwise
+and counterclockwise loops remain possible. `stats.turn_prunes` counts
+rejected nodes; set `turn_pruning=False` to disable this check.
+
+Final-wall pruning applies when inventory permits at most one additional
+wall (limited by walls and by connectors, reserving one for closure). Before
+expensive geometry checks, it rejects each connector/wall choice unless that
+wall ends within the Euclidean closure tolerance of the start and a remaining
+closing connector restores the original heading. It checks the actual endpoint
+rather than approximating the required wall direction. The official validator
+still checks the complete polygon. `stats.final_wall_prunes` counts rejected
+wall choices; set `final_wall_pruning=False` to disable this check.
+
 Dead branches stop when they leave the room (checking the whole wall even in
 concave rooms), cross/touch earlier walls, exceed the 30-unit straight-face
 limit, or lack walls/connectors. Touching the room boundary is allowed. One
@@ -104,7 +122,23 @@ uv run python -m players.player5.benchmark --workers 4 --cpu-limit 5
 The benchmark writes scores, completion status, node counts, combined CPU,
 simulator CPU, and wall time to `logs/player5-parallel-5s.json`. Pass scenario
 paths to run a subset, `--workers 1` for serial comparison, or `--output PATH`
-to change the report location.
+to change the report location. For an ablation comparison that keeps distance
+pruning enabled:
+
+```sh
+# Baseline: distance pruning alone
+uv run python -m players.player5.benchmark --no-turn-pruning --no-final-wall-pruning --output logs/baseline.json
+# Turn pruning alone added
+uv run python -m players.player5.benchmark --no-final-wall-pruning --output logs/turn.json
+# Final-wall pruning alone added
+uv run python -m players.player5.benchmark --no-turn-pruning --output logs/final-wall.json
+# Both added (the default)
+uv run python -m players.player5.benchmark --output logs/both.json
+```
+
+All four commands default to four workers sharing a five-second CPU budget.
+See [heuristic_evaluation.md](heuristic_evaluation.md) for measured results,
+including repeated runs of the scenario near the budget boundary.
 
 The simulator imports Tkinter even in headless mode. Use a Python installation
 with Tkinter available, as described in the repository setup instructions.

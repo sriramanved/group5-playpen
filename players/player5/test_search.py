@@ -5,7 +5,7 @@ import unittest
 
 from shapely.geometry import Polygon
 
-from players.player5.player import Player5
+from players.player5.player import Player5, _turn_completion_possible
 from src.enclosure import Construction, score_construction, validate_construction
 from src.inventory import Inventory
 from src.pieces import Connector, ConnectorType, Piece, PieceType
@@ -105,7 +105,13 @@ class ExhaustiveSearchTests(unittest.TestCase):
         self.assertEqual(player.best_score, 1030)
 
     def test_distance_pruning_rejects_unreachable_root(self):
-        kwargs = {"walls": {5: 3}, "gates": {20: 1}, "connectors": {RIGHT: 5}}
+        kwargs = {
+            "walls": {5: 3},
+            "gates": {20: 1},
+            "connectors": {RIGHT: 5},
+            "turn_pruning": False,
+            "final_wall_pruning": False,
+        }
         pruned = self.player(**kwargs)
         original = self.player(**kwargs, distance_pruning=False)
         self.assertIsNone(pruned.build_enclosure())
@@ -117,7 +123,13 @@ class ExhaustiveSearchTests(unittest.TestCase):
     def test_distance_pruning_accounts_for_closing_connector(self):
         # There are 40 units of walls, but only two can be added because the
         # third connector must be saved for closure: maximum return length 10.
-        kwargs = {"walls": {5: 8}, "gates": {15: 1}, "connectors": {RIGHT: 3}}
+        kwargs = {
+            "walls": {5: 8},
+            "gates": {15: 1},
+            "connectors": {RIGHT: 3},
+            "turn_pruning": False,
+            "final_wall_pruning": False,
+        }
         pruned = self.player(**kwargs)
         original = self.player(**kwargs, distance_pruning=False)
         self.assertIsNone(pruned.build_enclosure())
@@ -128,7 +140,12 @@ class ExhaustiveSearchTests(unittest.TestCase):
     def test_distance_pruning_preserves_all_valid_polygons(self):
         # Includes closures using precisely the remaining wall length, so the
         # bound must allow equality and floating point tolerance.
-        kwargs = {"walls": {5: 4, 10: 1}, "connectors": {STRAIGHT: 2, RIGHT: 4}}
+        kwargs = {
+            "walls": {5: 4, 10: 1},
+            "connectors": {STRAIGHT: 2, RIGHT: 4},
+            "turn_pruning": False,
+            "final_wall_pruning": False,
+        }
         pruned = self.player(**kwargs)
         original = self.player(**kwargs, distance_pruning=False)
         self.validated(pruned)
@@ -138,6 +155,85 @@ class ExhaustiveSearchTests(unittest.TestCase):
         self.assertEqual(pruned.stats.valid_polygons, original.stats.valid_polygons)
         self.assertGreater(pruned.stats.distance_prunes, 0)
         self.assertLess(pruned.stats.nodes, original.stats.nodes)
+
+    def test_turn_feasibility_matches_brute_force_connector_subsets(self):
+        # Independent enumeration includes unused pieces, both orientations,
+        # and minimum/maximum joint counts (not only a turn magnitude bound).
+        for right, diagonal, straight in itertools.product(
+            range(4), range(4), range(3)
+        ):
+            states = {(0, 0)}
+            for count, turns in (
+                (right, (-2, 2)),
+                (diagonal, (-1, 1)),
+                (straight, (0,)),
+            ):
+                for _ in range(count):
+                    states |= {
+                        (n + 1, total + turn) for n, total in states for turn in turns
+                    }
+            for minimum in (2, 3):
+                for maximum in range(right + diagonal + straight + 1):
+                    for used_turns in range(-12, 13):
+                        expected = any(
+                            minimum <= n <= maximum and used_turns + turn in (-8, 8)
+                            for n, turn in states
+                        )
+                        actual = _turn_completion_possible(
+                            used_turns, right, diagonal, straight, minimum, maximum
+                        )
+                        self.assertEqual(
+                            actual,
+                            expected,
+                            (used_turns, right, diagonal, straight, minimum, maximum),
+                        )
+
+    def test_turn_pruning_rejects_insufficient_total_turn(self):
+        kwargs = {
+            "walls": {5: 3},
+            "connectors": {RIGHT: 3, STRAIGHT: 1},
+            "final_wall_pruning": False,
+        }
+        original = self.player(**kwargs, turn_pruning=False)
+        pruned = self.player(**kwargs, turn_pruning=True)
+        self.assertIsNone(original.build_enclosure())
+        self.assertIsNone(pruned.build_enclosure())
+        self.assertEqual(pruned.stats.turn_prunes, 1)
+        self.assertLess(pruned.stats.nodes, original.stats.nodes)
+
+    def test_new_heuristics_preserve_all_polygons_and_reduce_nodes(self):
+        kwargs = {"walls": {5: 4, 10: 1}, "connectors": {STRAIGHT: 2, RIGHT: 4}}
+        original = self.player(**kwargs, turn_pruning=False, final_wall_pruning=False)
+        self.validated(original)
+        for turn, final in ((True, False), (False, True), (True, True)):
+            with self.subTest(turn=turn, final=final):
+                pruned = self.player(
+                    **kwargs, turn_pruning=turn, final_wall_pruning=final
+                )
+                self.validated(pruned)
+                self.assertTrue(pruned.search_complete)
+                self.assertEqual(pruned.best_score, original.best_score)
+                self.assertEqual(
+                    pruned.stats.valid_polygons, original.stats.valid_polygons
+                )
+                self.assertLess(pruned.stats.nodes, original.stats.nodes)
+                self.assertGreater(
+                    pruned.stats.turn_prunes + pruned.stats.final_wall_prunes, 0
+                )
+
+    def test_final_wall_pruning_preserves_clockwise_and_diagonal_solutions(self):
+        for kwargs in (
+            {"start": (10, 10)},
+            {"walls": {5: 7}, "connectors": {DIAGONAL: 8}, "start": (5, 5)},
+        ):
+            original = self.player(
+                **kwargs, turn_pruning=False, final_wall_pruning=False
+            )
+            pruned = self.player(**kwargs)
+            self.validated(original)
+            self.validated(pruned)
+            self.assertEqual(pruned.best_score, original.best_score)
+            self.assertEqual(pruned.stats.valid_polygons, original.stats.valid_polygons)
 
     def test_default_gate_is_centered_on_longest_edge(self):
         # Longest edge closes the room ring; it is vertical and points south.

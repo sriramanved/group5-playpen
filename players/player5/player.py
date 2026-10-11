@@ -6,6 +6,7 @@ import os
 import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, fields
+from functools import lru_cache
 
 from shapely.geometry import LineString
 
@@ -31,6 +32,33 @@ class SearchStats:
     face_prunes: int = 0
     exhausted_leaves: int = 0
     distance_prunes: int = 0
+    turn_prunes: int = 0
+    final_wall_prunes: int = 0
+
+
+@lru_cache(maxsize=8192)
+def _turn_completion_possible(turns, right, diagonal, straight, minimum, maximum):
+    """Exact connector-subset feasibility in units of 45 degrees.
+
+    A simple polygon has total turn +8 or -8. For r right connectors the
+    possible sums are -2r, -2r+4, ..., +2r. Diagonals contribute +/-1;
+    extra pairs can cancel, and straight connectors can fill unused joints.
+    """
+    if minimum > maximum:
+        return False
+    max_turn = 2 * min(right, maximum) + min(diagonal, max(0, maximum - right))
+    for target in (8 - turns, -8 - turns):
+        if abs(target) > max_turn or (diagonal == 0 and target % 2):
+            continue
+        for used_right in range(min(right, maximum) + 1):
+            # Closest attainable right-connector sum to the required turn.
+            positive = min(used_right, max(0, (target + 2 * used_right + 2) // 4))
+            residual = abs(target - (4 * positive - 2 * used_right))
+            used_diagonal = max(residual, minimum - used_right - straight, 0)
+            used_diagonal += (target - used_diagonal) % 2
+            if used_diagonal <= diagonal and used_right + used_diagonal <= maximum:
+                return True
+    return False
 
 
 class _BudgetExpired(Exception):
@@ -64,6 +92,8 @@ class Player5(Player):
         workers=None,
         cpu_limit=5.0,
         distance_pruning=True,
+        turn_pruning=True,
+        final_wall_pruning=True,
     ):
         super().__init__(room, inventory, weights)
         corners = room.get_boundary_points()
@@ -90,6 +120,8 @@ class Player5(Player):
         self.workers = min(4, os.cpu_count() or 1) if workers is None else workers
         self.cpu_limit = cpu_limit
         self.distance_pruning = distance_pruning
+        self.turn_pruning = turn_pruning
+        self.final_wall_pruning = final_wall_pruning
         self.search_complete = False
         self.search_cpu_seconds = 0.0
         self.gate_length = gate_length
@@ -246,6 +278,22 @@ class Player5(Player):
                 self.stats.distance_prunes += 1
                 return
 
+            if self.turn_pruning or self.final_wall_pruning:
+                remaining_walls = sum(stock.walls[length] for length in return_lengths)
+                remaining_connectors = stock.count_connectors()
+                maximum_walls = min(remaining_walls, remaining_connectors - 1)
+            if self.turn_pruning and not _turn_completion_possible(
+                round((heading - self.start_heading) / 45),
+                stock.connectors.get(ConnectorType.RIGHT, 0),
+                stock.connectors.get(ConnectorType.DIAGONAL, 0),
+                stock.connectors.get(ConnectorType.STRAIGHT, 0),
+                max(2, MIN_ENCLOSURE_PIECES - len(pieces) + 1),
+                maximum_walls + 1,
+            ):
+                self.stats.turn_prunes += 1
+                return
+
+            last_wall = self.final_wall_pruning and maximum_walls == 1
             for joint_index, joint in enumerate(choices):
                 if not stock.take_connector(joint.connector_type):
                     continue
@@ -265,6 +313,26 @@ class Player5(Player):
                         self.stats.face_prunes += 1
                         continue
                     end = endpoint(next_heading, length)
+                    if last_wall:
+                        can_close = False
+                        if (
+                            len(pieces) + 1 >= MIN_ENCLOSURE_PIECES
+                            and math.dist(end, start) <= TOL
+                        ):
+                            for closing in choices:
+                                if stock.connectors.get(closing.connector_type, 0) <= 0:
+                                    continue
+                                gap = (
+                                    next_heading
+                                    + closing.turn_angle()
+                                    - self.start_heading
+                                ) % 360
+                                if min(gap, 360 - gap) <= ANGLE_TOL:
+                                    can_close = True
+                                    break
+                        if not can_close:
+                            self.stats.final_wall_prunes += 1
+                            continue
                     if not room_area.covers(LineString([points[-1], end])):
                         self.stats.boundary_prunes += 1
                         continue
