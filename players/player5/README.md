@@ -69,6 +69,18 @@ at every depth, so solutions may leave inventory unused. Inventory is copied
 before use. Lengths below the simulator's five-unit minimum are unusable and
 skipped, including those present in some upstream scenarios.
 
+Distance pruning rejects a branch when its endpoint's straight-line distance
+back to the gate start exceeds the maximum total length of walls it could
+still add (plus the simulator's closure tolerance). It sums the longest
+remaining usable walls, limited to `remaining connectors - 1` wall slots,
+reserving a connector for closure. For example, if the start is 18 units away
+but the remaining walls can span at most 15 units, closure is impossible.
+This is a safe upper bound by the triangle inequality; equality is allowed.
+It ignores turns and obstacles, so it can retain impossible paths but cannot
+exclude a valid completion. `stats.distance_prunes` counts rejected nodes.
+Set `distance_pruning=False` or benchmark with `--no-distance-pruning` for an
+otherwise identical comparison.
+
 Dead branches stop when they leave the room (checking the whole wall even in
 concave rooms), cross/touch earlier walls, exceed the 30-unit straight-face
 limit, or lack walls/connectors. Touching the room boundary is allowed. One

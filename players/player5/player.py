@@ -30,6 +30,7 @@ class SearchStats:
     crossing_prunes: int = 0
     face_prunes: int = 0
     exhausted_leaves: int = 0
+    distance_prunes: int = 0
 
 
 class _BudgetExpired(Exception):
@@ -62,6 +63,7 @@ class Player5(Player):
         gate_length=None,
         workers=None,
         cpu_limit=5.0,
+        distance_pruning=True,
     ):
         super().__init__(room, inventory, weights)
         corners = room.get_boundary_points()
@@ -87,6 +89,7 @@ class Player5(Player):
             raise ValueError("cpu_limit must be finite and positive, or None")
         self.workers = min(4, os.cpu_count() or 1) if workers is None else workers
         self.cpu_limit = cpu_limit
+        self.distance_pruning = distance_pruning
         self.search_complete = False
         self.search_cpu_seconds = 0.0
         self.gate_length = gate_length
@@ -155,6 +158,28 @@ class Player5(Player):
         best = None
         stock = self.inventory.copy()
         room_area = self.room.polygon.buffer(TOL)
+        return_lengths = sorted(
+            (
+                length
+                for length in stock.walls
+                if MIN_WALL_LENGTH <= length <= MAX_FACE_LENGTH
+            ),
+            reverse=True,
+        )
+
+        def maximum_return_distance():
+            # Each added wall needs a connector, and the root needs one more.
+            # Ignore turns/obstacles to overestimate reach, never underestimate it.
+            slots = max(0, stock.count_connectors() - 1)
+            reach = 0
+            for length in return_lengths:
+                count = min(max(0, stock.walls[length]), slots)
+                reach += length * count
+                slots -= count
+                if slots == 0:
+                    break
+            return reach
+
         choices = [
             Connector(kind, reflex)
             for kind in ConnectorType
@@ -177,7 +202,8 @@ class Player5(Player):
             nonlocal best
             check_budget()
             self.stats.nodes += 1
-            closed = math.dist(points[-1], start) <= TOL
+            distance_to_start = math.dist(points[-1], start)
+            closed = distance_to_start <= TOL
             if closed:
                 if len(pieces) >= MIN_ENCLOSURE_PIECES:
                     for closing in choices:
@@ -209,6 +235,15 @@ class Player5(Player):
             # One extra connector is always required to close at the root.
             if sum(stock.walls.values()) == 0 or stock.count_connectors() < 2:
                 self.stats.exhausted_leaves += 1
+                return
+
+            # By the triangle inequality, no chain of the remaining walls
+            # can reach the start if even its maximum total length is too short.
+            if (
+                self.distance_pruning
+                and distance_to_start > maximum_return_distance() + TOL
+            ):
+                self.stats.distance_prunes += 1
                 return
 
             for joint_index, joint in enumerate(choices):

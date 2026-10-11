@@ -104,6 +104,41 @@ class ExhaustiveSearchTests(unittest.TestCase):
         self.validated(player)
         self.assertEqual(player.best_score, 1030)
 
+    def test_distance_pruning_rejects_unreachable_root(self):
+        kwargs = {"walls": {5: 3}, "gates": {20: 1}, "connectors": {RIGHT: 5}}
+        pruned = self.player(**kwargs)
+        original = self.player(**kwargs, distance_pruning=False)
+        self.assertIsNone(pruned.build_enclosure())
+        self.assertIsNone(original.build_enclosure())
+        self.assertEqual(pruned.stats.distance_prunes, 1)
+        self.assertLess(pruned.stats.nodes, original.stats.nodes)
+        self.assertTrue(pruned.search_complete)
+
+    def test_distance_pruning_accounts_for_closing_connector(self):
+        # There are 40 units of walls, but only two can be added because the
+        # third connector must be saved for closure: maximum return length 10.
+        kwargs = {"walls": {5: 8}, "gates": {15: 1}, "connectors": {RIGHT: 3}}
+        pruned = self.player(**kwargs)
+        original = self.player(**kwargs, distance_pruning=False)
+        self.assertIsNone(pruned.build_enclosure())
+        self.assertIsNone(original.build_enclosure())
+        self.assertEqual(pruned.stats.distance_prunes, 1)
+        self.assertLess(pruned.stats.nodes, original.stats.nodes)
+
+    def test_distance_pruning_preserves_all_valid_polygons(self):
+        # Includes closures using precisely the remaining wall length, so the
+        # bound must allow equality and floating point tolerance.
+        kwargs = {"walls": {5: 4, 10: 1}, "connectors": {STRAIGHT: 2, RIGHT: 4}}
+        pruned = self.player(**kwargs)
+        original = self.player(**kwargs, distance_pruning=False)
+        self.validated(pruned)
+        self.validated(original)
+        self.assertTrue(pruned.search_complete)
+        self.assertEqual(pruned.best_score, original.best_score)
+        self.assertEqual(pruned.stats.valid_polygons, original.stats.valid_polygons)
+        self.assertGreater(pruned.stats.distance_prunes, 0)
+        self.assertLess(pruned.stats.nodes, original.stats.nodes)
+
     def test_default_gate_is_centered_on_longest_edge(self):
         # Longest edge closes the room ring; it is vertical and points south.
         room = [(0, 0), (8, 0), (8, 8), (0, 11)]

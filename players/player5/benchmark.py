@@ -21,6 +21,7 @@ def main():
     parser.add_argument(
         "--output", type=Path, default=Path("logs/player5-parallel-5s.json")
     )
+    parser.add_argument("--no-distance-pruning", action="store_true")
     args = parser.parse_args()
     scenarios = args.scenarios or sorted(
         Path("scenarios/players").glob("player*/*.json")
@@ -28,7 +29,11 @@ def main():
     rows = []
     for path in scenarios:
         wall_start = time.monotonic()
-        row = {"scenario": str(path), "workers": args.workers}
+        row = {
+            "scenario": str(path),
+            "workers": args.workers,
+            "distance_pruning": not args.no_distance_pruning,
+        }
         try:
             scenario = read_scenario(str(path))
             with CpuLimit(args.cpu_limit) as cpu:
@@ -38,6 +43,7 @@ def main():
                     scenario.weights,
                     workers=args.workers,
                     cpu_limit=args.cpu_limit,
+                    distance_pruning=not args.no_distance_pruning,
                 )
                 candidate = player.build_enclosure()
             row.update(
