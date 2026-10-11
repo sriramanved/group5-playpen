@@ -1,12 +1,22 @@
 """Naive exhaustive search with a fixed first-gate pose and exactly one gate."""
 
 import math
-from dataclasses import dataclass
+import multiprocessing
+import os
+import time
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass, fields
 
 from shapely.geometry import LineString
 
 from players.player0 import Player
-from src.constants import ANGLE_TOL, MAX_FACE_LENGTH, MIN_ENCLOSURE_PIECES, TOL
+from src.constants import (
+    ANGLE_TOL,
+    MAX_FACE_LENGTH,
+    MIN_ENCLOSURE_PIECES,
+    MIN_WALL_LENGTH,
+    TOL,
+)
 from src.enclosure import Construction, score_construction, validate_construction
 from src.pieces import Connector, ConnectorType, Piece, PieceType
 
@@ -22,13 +32,23 @@ class SearchStats:
     exhausted_leaves: int = 0
 
 
+class _BudgetExpired(Exception):
+    pass
+
+
+def _run_partition(player, partition, partitions, budget):
+    # Spawned workers are fresh processes: include their Python startup CPU.
+    return player._search_partition(partition, partitions, budget, cpu_start=0.0)
+
+
 class Player5(Player):
     """Enumerate every wall/connector chain rooted at a fixed starting gate.
 
     Defaults to centering the gate along the longest room edge.
     Optional keyword arguments fix another pose or a particular gate length.
-    No beam width, depth cap, early success exit, or internal time limit: the
-    simulator's CPU limit still applies. Only tiny inventories are practical.
+    Workers explore disjoint first-wall branches. The default five-second
+    CPU budget is shared across workers; return the best polygon found so far.
+    Set workers=1, cpu_limit=None for the original unbounded exhaustive DFS.
     """
 
     def __init__(
@@ -40,6 +60,8 @@ class Player5(Player):
         start=None,
         start_heading=None,
         gate_length=None,
+        workers=None,
+        cpu_limit=5.0,
     ):
         super().__init__(room, inventory, weights)
         corners = room.get_boundary_points()
@@ -59,11 +81,75 @@ class Player5(Player):
             if start_heading is None
             else start_heading
         )
+        if workers is not None and (not isinstance(workers, int) or workers < 1):
+            raise ValueError("workers must be a positive integer")
+        if cpu_limit is not None and (not math.isfinite(cpu_limit) or cpu_limit <= 0):
+            raise ValueError("cpu_limit must be finite and positive, or None")
+        self.workers = min(4, os.cpu_count() or 1) if workers is None else workers
+        self.cpu_limit = cpu_limit
+        self.search_complete = False
+        self.search_cpu_seconds = 0.0
         self.gate_length = gate_length
         self.stats = SearchStats()
         self.best_score = float("-inf")
 
     def build_enclosure(self) -> Construction | None:
+        started = time.process_time()
+        # Reserve parent orchestration CPU, which the simulator also counts.
+        budget = (
+            None
+            if self.cpu_limit is None
+            else max(self.cpu_limit * 0.8, self.cpu_limit - 0.5)
+        )
+        if self.workers == 1:
+            results = [self._search_partition(0, 1, budget)]
+            worker_cpu = 0.0  # already included in this process's CPU time
+        else:
+            worker_budget = None if budget is None else budget / self.workers
+            with ProcessPoolExecutor(
+                max_workers=self.workers,
+                mp_context=multiprocessing.get_context("spawn"),
+            ) as pool:
+                futures = [
+                    pool.submit(_run_partition, self, i, self.workers, worker_budget)
+                    for i in range(self.workers)
+                ]
+                results = [future.result() for future in futures]
+            worker_cpu = sum(result[4] for result in results)
+        self.stats = SearchStats()
+        self.best_score = float("-inf")
+        self.search_complete = all(result[3] for result in results)
+        self.search_cpu_seconds = time.process_time() - started + worker_cpu
+        best = None
+        for candidate, stats, score, _, _ in results:
+            for field in fields(SearchStats):
+                setattr(
+                    self.stats,
+                    field.name,
+                    getattr(self.stats, field.name) + getattr(stats, field.name),
+                )
+            if candidate is not None and score > self.best_score:
+                best, self.best_score = candidate, score
+        outcome = (
+            f"best score {self.best_score:g}"
+            if best is not None
+            else "no solution found"
+        )
+        state = "complete" if self.search_complete else "budget reached"
+        self.note = (
+            f"DFS ({self.workers} workers, {state}): {self.stats.nodes} nodes, "
+            f"{self.stats.valid_polygons} valid polygons; {outcome}; "
+            f"total CPU {self.search_cpu_seconds:.2f}s"
+        )
+        return best
+
+    def _search_partition(self, partition, partitions, budget, cpu_start=None):
+        started = time.process_time() if cpu_start is None else cpu_start
+
+        def check_budget():
+            if budget is not None and time.process_time() - started >= budget:
+                raise _BudgetExpired
+
         self.stats = SearchStats()
         self.best_score = float("-inf")
         best = None
@@ -89,6 +175,7 @@ class Player5(Player):
 
         def search(heading, face_length):
             nonlocal best
+            check_budget()
             self.stats.nodes += 1
             closed = math.dist(points[-1], start) <= TOL
             if closed:
@@ -124,12 +211,19 @@ class Player5(Player):
                 self.stats.exhausted_leaves += 1
                 return
 
-            for joint in choices:
+            for joint_index, joint in enumerate(choices):
                 if not stock.take_connector(joint.connector_type):
                     continue
                 next_heading = heading + joint.turn_angle()
-                for length, count in stock.walls.items():
-                    if count <= 0:
+                for wall_index, (length, count) in enumerate(stock.walls.items()):
+                    check_budget()
+                    if (
+                        len(pieces) == 1
+                        and (joint_index * len(stock.walls) + wall_index) % partitions
+                        != partition
+                    ):
+                        continue
+                    if count <= 0 or length < MIN_WALL_LENGTH:
                         continue
                     next_face = face_length + length if joint.is_straight() else length
                     if next_face > MAX_FACE_LENGTH + TOL:
@@ -156,41 +250,46 @@ class Player5(Player):
                     stock.walls[length] += 1
                 stock.connectors[joint.connector_type] += 1
 
-        for length, count in sorted(stock.gates.items()):
-            if count <= 0 or (
-                self.gate_length is not None and length != self.gate_length
-            ):
-                continue
-            if length > MAX_FACE_LENGTH + TOL:
-                self.stats.face_prunes += 1
-                continue
-            theta = math.radians(self.start_heading)
-            start = (
-                self.start
-                if self.start is not None
-                else (
-                    self.edge_midpoint[0] - length * math.cos(theta) / 2,
-                    self.edge_midpoint[1] - length * math.sin(theta) / 2,
+        complete = True
+        try:
+            for length, count in sorted(stock.gates.items()):
+                if (
+                    count <= 0
+                    or length < MIN_WALL_LENGTH
+                    or (self.gate_length is not None and length != self.gate_length)
+                ):
+                    continue
+                if length > MAX_FACE_LENGTH + TOL:
+                    self.stats.face_prunes += 1
+                    continue
+                theta = math.radians(self.start_heading)
+                start = (
+                    self.start
+                    if self.start is not None
+                    else (
+                        self.edge_midpoint[0] - length * math.cos(theta) / 2,
+                        self.edge_midpoint[1] - length * math.sin(theta) / 2,
+                    )
                 )
-            )
-            points[:] = [start]
-            end = endpoint(self.start_heading, length)
-            if not room_area.covers(LineString([start, end])):
-                self.stats.boundary_prunes += 1
-                continue
-            stock.gates[length] -= 1
-            pieces.append(Piece(PieceType.GATE, length))
-            points.append(end)
-            search(self.start_heading, length)
-            points.pop()
-            pieces.pop()
-            stock.gates[length] += 1
+                points[:] = [start]
+                end = endpoint(self.start_heading, length)
+                if not room_area.covers(LineString([start, end])):
+                    self.stats.boundary_prunes += 1
+                    continue
+                stock.gates[length] -= 1
+                pieces.append(Piece(PieceType.GATE, length))
+                points.append(end)
+                search(self.start_heading, length)
+                points.pop()
+                pieces.pop()
+                stock.gates[length] += 1
 
-        outcome = (
-            f"best score {self.best_score:g}" if best is not None else "no solution"
+        except _BudgetExpired:
+            complete = False
+        return (
+            best,
+            self.stats,
+            self.best_score,
+            complete,
+            time.process_time() - started,
         )
-        self.note = (
-            f"Exhaustive fixed-gate search: {self.stats.nodes} nodes, "
-            f"{self.stats.valid_polygons} valid polygons; {outcome}"
-        )
-        return best

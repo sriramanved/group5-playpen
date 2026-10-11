@@ -20,6 +20,8 @@ DIAGONAL = ConnectorType.DIAGONAL
 class ExhaustiveSearchTests(unittest.TestCase):
     def player(self, walls=None, gates=None, connectors=None, room=None, **kwargs):
         kwargs.setdefault("start", (0, 0))
+        kwargs.setdefault("workers", 1)
+        kwargs.setdefault("cpu_limit", None)
         return Player5(
             Room(Polygon(room or [(0, 0), (20, 0), (20, 20), (0, 20)])),
             Inventory(
@@ -37,6 +39,70 @@ class ExhaustiveSearchTests(unittest.TestCase):
         result = validate_construction(construction, player.room, player.inventory)
         self.assertTrue(result.valid, result.reason)
         return construction, result
+
+    def test_parallel_matches_serial_exhaustive_score(self):
+        serial = self.player(walls={5: 4, 10: 1}, connectors={STRAIGHT: 2, RIGHT: 4})
+        parallel = self.player(
+            walls={5: 4, 10: 1}, connectors={STRAIGHT: 2, RIGHT: 4}, workers=2
+        )
+        self.validated(serial)
+        self.validated(parallel)
+        self.assertTrue(parallel.search_complete)
+        self.assertEqual(parallel.best_score, serial.best_score)
+        self.assertEqual(parallel.stats.valid_polygons, serial.stats.valid_polygons)
+
+    def test_budget_returns_incumbent_without_exhausting_tree(self):
+        player = self.player(walls={5: 10}, connectors={RIGHT: 12, STRAIGHT: 8})
+        # Force the budget to expire as soon as a valid polygon is scored.
+        from unittest.mock import patch
+
+        import players.player5.player as module
+
+        original = module.score_construction
+
+        def scored(result, weights):
+            score = original(result, weights)
+            clock[0] = 10.0
+            return score
+
+        clock = [0.0]
+        with (
+            patch.object(module.time, "process_time", side_effect=lambda: clock[0]),
+            patch.object(module, "score_construction", side_effect=scored),
+        ):
+            candidate, _, score, complete, _ = player._search_partition(0, 1, 1.0)
+        self.assertIsNotNone(candidate)
+        self.assertTrue(
+            validate_construction(candidate, player.room, player.inventory).valid
+        )
+        self.assertFalse(complete)
+        self.assertGreater(score, 0)
+
+    def test_parallel_budget_and_worker_cleanup(self):
+        import multiprocessing
+
+        player = self.player(
+            walls={5: 30},
+            connectors={RIGHT: 30, STRAIGHT: 30},
+            workers=2,
+            cpu_limit=1.0,
+        )
+        before = {child.pid for child in multiprocessing.active_children()}
+        candidate = player.build_enclosure()
+        self.assertFalse(player.search_complete)
+        self.assertLess(player.search_cpu_seconds, 1.5)
+        self.assertEqual(
+            before, {child.pid for child in multiprocessing.active_children()}
+        )
+        if candidate is not None:
+            self.assertTrue(
+                validate_construction(candidate, player.room, player.inventory).valid
+            )
+
+    def test_unusable_short_pieces_are_skipped(self):
+        player = self.player(walls={1: 3, 5: 3}, gates={4: 1, 5: 1})
+        self.validated(player)
+        self.assertEqual(player.best_score, 1030)
 
     def test_default_gate_is_centered_on_longest_edge(self):
         # Longest edge closes the room ring; it is vertical and points south.
